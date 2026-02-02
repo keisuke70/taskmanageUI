@@ -1,5 +1,5 @@
 import { execSync } from 'child_process';
-import { searchEmails, getEmailDetail, getCalendarEvents } from './gog';
+import { searchEmailsAllAccounts, getEmailDetail, getCalendarEventsAllAccounts } from './gog';
 
 export interface Suggestion {
   id: string;
@@ -70,8 +70,8 @@ async function analyzeWithClaude(
 }
 
 export async function analyzeEmails(clientLocalDate?: string): Promise<Suggestion[]> {
-  // Search for recent unread emails (excluding promotions)
-  const searchResult = await searchEmails('is:unread -category:promotions newer_than:3d', 10);
+  // Search for recent unread emails from ALL accounts (excluding promotions)
+  const searchResult = await searchEmailsAllAccounts('is:unread -category:promotions newer_than:2d', 10);
 
   if (!searchResult.success || !searchResult.data || searchResult.data.length === 0) {
     return [];
@@ -82,8 +82,8 @@ export async function analyzeEmails(clientLocalDate?: string): Promise<Suggestio
 
   // Process emails in batches to avoid overwhelming Claude
   for (const email of emails.slice(0, 5)) {
-    // Get email detail for better context
-    const detailResult = await getEmailDetail(email.id);
+    // Get email detail for better context (pass account for correct lookup)
+    const detailResult = await getEmailDetail(email.id, email.account);
     const snippet = detailResult.success && detailResult.data?.message?.snippet
       ? detailResult.data.message.snippet
       : '';
@@ -96,6 +96,7 @@ export async function analyzeEmails(clientLocalDate?: string): Promise<Suggestio
 From: ${email.from}
 Subject: ${email.subject}
 Date: ${email.date}
+Account: ${email.account || 'unknown'}
 Content: ${snippet || body}
 
 関係ないメール（広告、通知のみ）の場合はタスクなしで返す。`;
@@ -124,12 +125,12 @@ Content: ${snippet || body}
 export async function analyzeCalendar(clientLocalDate?: string): Promise<Suggestion[]> {
   const today = clientLocalDate || toLocalDateString(new Date());
 
-  // Get events for next 7 days
+  // Get events for next 7 days from ALL accounts
   const endDate = new Date(today + 'T12:00:00');
   endDate.setDate(endDate.getDate() + 7);
   const endDateStr = toLocalDateString(endDate);
 
-  const eventsResult = await getCalendarEvents(today, endDateStr);
+  const eventsResult = await getCalendarEventsAllAccounts(today, endDateStr);
 
   if (!eventsResult.success || !eventsResult.data || eventsResult.data.length === 0) {
     return [];

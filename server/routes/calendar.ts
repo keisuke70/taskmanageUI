@@ -3,11 +3,11 @@ import * as gog from '../services/gog';
 
 const router = Router();
 
-// Get calendar events
+// Get calendar events from all configured accounts
 router.get('/', async (req: Request, res: Response) => {
   const start = req.query.start as string | undefined;
   const end = req.query.end as string | undefined;
-  const result = await gog.getCalendarEvents(start, end);
+  const result = await gog.getCalendarEventsAllAccounts(start, end);
   if (!result.success) {
     res.status(500).json({ message: result.error });
     return;

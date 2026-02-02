@@ -31,6 +31,7 @@ export interface CalendarEvent {
   };
   location?: string;
   htmlLink?: string;
+  account?: string; // Google account this event belongs to
 }
 
 export interface AiMessage {

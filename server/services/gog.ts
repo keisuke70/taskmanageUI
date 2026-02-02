@@ -13,6 +13,36 @@ const GOG_ENV = {
   PATH: `${process.env.HOME}/.local/bin:${process.env.PATH}`,
 };
 
+// Load .env file from project root
+function loadEnv(): void {
+  try {
+    const envPath = path.join(import.meta.dirname, '../../.env');
+    const content = fs.readFileSync(envPath, 'utf-8');
+    for (const line of content.split('\n')) {
+      const match = line.match(/^([A-Z_]+)=["']?(.+?)["']?$/);
+      if (match && !process.env[match[1]]) {
+        process.env[match[1]] = match[2];
+      }
+    }
+  } catch {
+    // .env file doesn't exist - that's fine for single account setups
+  }
+}
+
+loadEnv();
+
+// Account configuration
+// GOG_PRIMARY_ACCOUNT: used for write operations (create tasks, events)
+// GOG_ACCOUNTS: comma-separated list of accounts to read from
+const GOG_PRIMARY_ACCOUNT = process.env.GOG_PRIMARY_ACCOUNT || process.env.GOG_ACCOUNT || '';
+const GOG_ACCOUNTS = process.env.GOG_ACCOUNTS
+  ? process.env.GOG_ACCOUNTS.split(',').map(a => a.trim())
+  : (GOG_PRIMARY_ACCOUNT ? [GOG_PRIMARY_ACCOUNT] : []);
+const GOG_CWD = process.env.HOME || '/tmp';
+
+// For backward compatibility
+const GOG_ACCOUNT = GOG_PRIMARY_ACCOUNT;
+
 // Google API direct access (for operations gog doesn't support)
 interface TokenCache {
   accessToken: string;
@@ -31,10 +61,13 @@ async function getAccessToken(): Promise<string> {
   const credentialsPath = path.join(process.env.HOME || '', '.config/gogcli/credentials.json');
   const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf-8'));
 
-  // Export refresh token
+  // Export refresh token (requires GOG_ACCOUNT to be set for multiple accounts)
+  if (!GOG_ACCOUNT) {
+    throw new Error('GOG_ACCOUNT environment variable required for this operation with multiple accounts');
+  }
   const tokenPath = '/tmp/gog_token_export.json';
   await new Promise<void>((resolve, reject) => {
-    const proc = spawn('bash', ['-c', `source ~/.gog_env && gog auth tokens export keith235670@gmail.com --out ${tokenPath} --overwrite`], { env: GOG_ENV });
+    const proc = spawn('bash', ['-c', `source ~/.gog_env && gog auth tokens export ${GOG_ACCOUNT} --out ${tokenPath} --overwrite`], { env: GOG_ENV, cwd: GOG_CWD });
     proc.on('close', (code) => code === 0 ? resolve() : reject(new Error('Failed to export token')));
     proc.on('error', reject);
   });
@@ -70,15 +103,19 @@ async function getAccessToken(): Promise<string> {
 // Default task list ID - will be fetched on first use
 let defaultTaskListId: string | null = null;
 
-async function execGog<T>(args: string[]): Promise<GogResult<T>> {
+// Execute gog command with optional specific account
+async function execGogWithAccount<T>(args: string[], account?: string): Promise<GogResult<T>> {
   return new Promise((resolve) => {
     const chunks: Buffer[] = [];
     const errorChunks: Buffer[] = [];
 
-    // Source the gog env file first via shell
-    const command = `source ~/.gog_env 2>/dev/null; gog ${args.map(a => `"${a.replace(/"/g, '\\"')}"`).join(' ')}`;
+    // Use specified account, or fall back to primary account
+    const targetAccount = account || GOG_PRIMARY_ACCOUNT;
+    const allArgs = targetAccount ? [...args, '--account', targetAccount] : args;
+    const command = `source ~/.gog_env 2>/dev/null; gog ${allArgs.map(a => `"${a.replace(/"/g, '\\"')}"`).join(' ')}`;
     const proc = spawn('bash', ['-c', command], {
       env: GOG_ENV,
+      cwd: GOG_CWD,
     });
 
     proc.stdout.on('data', (data) => chunks.push(data));
@@ -105,6 +142,11 @@ async function execGog<T>(args: string[]): Promise<GogResult<T>> {
       resolve({ success: false, error: err.message });
     });
   });
+}
+
+// Default execGog uses primary account (for backward compatibility)
+async function execGog<T>(args: string[]): Promise<GogResult<T>> {
+  return execGogWithAccount<T>(args, GOG_PRIMARY_ACCOUNT);
 }
 
 // Task Lists
@@ -254,8 +296,9 @@ export async function deleteTask(taskId: string, listId?: string): Promise<GogRe
   const taskListId = listId || await getDefaultTaskListId();
   // Delete doesn't return JSON, so we use a custom exec that just checks exit code
   return new Promise((resolve) => {
-    const command = `source ~/.gog_env 2>/dev/null; gog tasks delete "${taskListId}" "${taskId}" --force`;
-    const proc = spawn('bash', ['-c', command], { env: GOG_ENV });
+    const accountFlag = GOG_ACCOUNT ? ` --account "${GOG_ACCOUNT}"` : '';
+    const command = `source ~/.gog_env 2>/dev/null; gog tasks delete "${taskListId}" "${taskId}" --force${accountFlag}`;
+    const proc = spawn('bash', ['-c', command], { env: GOG_ENV, cwd: GOG_CWD });
 
     let stderr = '';
     proc.stderr.on('data', (data) => { stderr += data.toString(); });
@@ -282,6 +325,7 @@ export interface EmailThread {
   subject: string;
   labels: string[];
   messageCount: number;
+  account?: string; // Which account this email belongs to
 }
 
 export interface EmailDetail {
@@ -297,6 +341,7 @@ export interface EmailDetail {
     threadId: string;
     snippet: string;
   };
+  account?: string;
 }
 
 interface EmailSearchResponse {
@@ -304,17 +349,55 @@ interface EmailSearchResponse {
   nextPageToken?: string;
 }
 
-export async function searchEmails(query: string, maxResults = 10): Promise<GogResult<EmailThread[]>> {
-  const result = await execGog<EmailSearchResponse>(['gmail', 'search', query, '--json']);
+// Search emails from a single account
+export async function searchEmails(query: string, maxResults = 10, account?: string): Promise<GogResult<EmailThread[]>> {
+  const result = await execGogWithAccount<EmailSearchResponse>(['gmail', 'search', query, '--json'], account);
   if (result.success && result.data) {
-    const threads = result.data.threads || [];
-    return { success: true, data: threads.slice(0, maxResults) };
+    const threads = (result.data.threads || []).slice(0, maxResults).map(t => ({ ...t, account }));
+    return { success: true, data: threads };
   }
   return result as GogResult<EmailThread[]>;
 }
 
-export async function getEmailDetail(messageId: string): Promise<GogResult<EmailDetail>> {
-  const result = await execGog<EmailDetail>(['gmail', 'get', messageId, '--json']);
+// Search emails from ALL configured accounts
+export async function searchEmailsAllAccounts(query: string, maxResults = 10): Promise<GogResult<EmailThread[]>> {
+  if (GOG_ACCOUNTS.length === 0) {
+    return { success: false, error: 'No accounts configured' };
+  }
+
+  const results = await Promise.all(
+    GOG_ACCOUNTS.map(account => searchEmails(query, maxResults, account))
+  );
+
+  const allThreads: EmailThread[] = [];
+  const errors: string[] = [];
+
+  for (const result of results) {
+    if (result.success && result.data) {
+      allThreads.push(...result.data);
+    } else if (result.error) {
+      errors.push(result.error);
+    }
+  }
+
+  // Sort by date (newest first)
+  allThreads.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+  // Limit total results
+  const limited = allThreads.slice(0, maxResults);
+
+  if (limited.length === 0 && errors.length > 0) {
+    return { success: false, error: errors.join('; ') };
+  }
+
+  return { success: true, data: limited };
+}
+
+export async function getEmailDetail(messageId: string, account?: string): Promise<GogResult<EmailDetail>> {
+  const result = await execGogWithAccount<EmailDetail>(['gmail', 'get', messageId, '--json'], account);
+  if (result.success && result.data) {
+    return { success: true, data: { ...result.data, account } };
+  }
   return result;
 }
 
@@ -327,24 +410,66 @@ export interface CalendarEvent {
   end: { dateTime?: string; date?: string };
   location?: string;
   htmlLink?: string;
+  account?: string; // Which account this event belongs to
 }
 
 interface CalendarEventsResponse {
   events: CalendarEvent[];
 }
 
+// Get calendar events from a single account
 export async function getCalendarEvents(
   startDate?: string,
-  endDate?: string
+  endDate?: string,
+  account?: string
 ): Promise<GogResult<CalendarEvent[]>> {
   const args = ['calendar', 'events', '--json'];
   if (startDate) args.push('--from', startDate);
   if (endDate) args.push('--to', endDate);
-  const result = await execGog<CalendarEventsResponse>(args);
+  const result = await execGogWithAccount<CalendarEventsResponse>(args, account);
   if (result.success && result.data) {
-    return { success: true, data: result.data.events || [] };
+    const events = (result.data.events || []).map(e => ({ ...e, account }));
+    return { success: true, data: events };
   }
   return result as GogResult<CalendarEvent[]>;
+}
+
+// Get calendar events from ALL configured accounts
+export async function getCalendarEventsAllAccounts(
+  startDate?: string,
+  endDate?: string
+): Promise<GogResult<CalendarEvent[]>> {
+  if (GOG_ACCOUNTS.length === 0) {
+    return { success: false, error: 'No accounts configured' };
+  }
+
+  const results = await Promise.all(
+    GOG_ACCOUNTS.map(account => getCalendarEvents(startDate, endDate, account))
+  );
+
+  const allEvents: CalendarEvent[] = [];
+  const errors: string[] = [];
+
+  for (const result of results) {
+    if (result.success && result.data) {
+      allEvents.push(...result.data);
+    } else if (result.error) {
+      errors.push(result.error);
+    }
+  }
+
+  // Sort by start time
+  allEvents.sort((a, b) => {
+    const aTime = a.start.dateTime || a.start.date || '';
+    const bTime = b.start.dateTime || b.start.date || '';
+    return aTime.localeCompare(bTime);
+  });
+
+  if (allEvents.length === 0 && errors.length > 0) {
+    return { success: false, error: errors.join('; ') };
+  }
+
+  return { success: true, data: allEvents };
 }
 
 interface CalendarEventResponse {

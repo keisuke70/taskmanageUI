@@ -76,6 +76,40 @@ function formatTaskDue(due: string): string {
 const HOUR_HEIGHT = 60; // pixels per hour
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
 
+// Account color schemes
+const ACCOUNT_COLORS: Record<string, { bg: string; text: string; border: string; hover: string }> = {
+  'keith235670@gmail.com': {
+    bg: 'bg-blue-100',
+    text: 'text-blue-800',
+    border: 'border-blue-500',
+    hover: 'hover:bg-blue-200',
+  },
+  'singularradio01@gmail.com': {
+    bg: 'bg-emerald-100',
+    text: 'text-emerald-800',
+    border: 'border-emerald-500',
+    hover: 'hover:bg-emerald-200',
+  },
+};
+
+const DEFAULT_COLORS = {
+  bg: 'bg-gray-100',
+  text: 'text-gray-800',
+  border: 'border-gray-500',
+  hover: 'hover:bg-gray-200',
+};
+
+function getAccountColors(account?: string) {
+  if (!account) return DEFAULT_COLORS;
+  return ACCOUNT_COLORS[account] || DEFAULT_COLORS;
+}
+
+function getAccountLabel(account?: string): string {
+  if (!account) return '';
+  // Return first part of email for display
+  return account.split('@')[0];
+}
+
 function getEventPosition(event: CalendarEvent): { top: number; height: number } | null {
   if (!event.start.dateTime) return null;
 
@@ -465,6 +499,17 @@ export function CalendarView({
             <span className="text-sm font-medium text-gray-900">{formatHeader()}</span>
           </div>
         )}
+        {/* Account color legend */}
+        {events.length > 0 && (
+          <div className="flex items-center gap-3 mt-1 justify-center">
+            {Object.entries(ACCOUNT_COLORS).map(([account, colors]) => (
+              <div key={account} className="flex items-center gap-1">
+                <div className={`w-2 h-2 rounded ${colors.bg} ${colors.border} border`} />
+                <span className="text-[10px] text-gray-500">{getAccountLabel(account)}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {loading ? (
@@ -505,17 +550,20 @@ export function CalendarView({
                   const dayTasks = getTasksForDay(day);
                   return (
                     <div key={day.toISOString()} className="p-1 space-y-1 min-h-[32px]">
-                      {allDayEvents.map((event) => (
-                        <a
-                          key={event.id}
-                          href={event.htmlLink}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="block px-1.5 py-0.5 bg-purple-100 text-purple-800 hover:bg-purple-200 rounded text-xs truncate"
-                        >
-                          {event.summary}
-                        </a>
-                      ))}
+                      {allDayEvents.map((event) => {
+                        const colors = getAccountColors(event.account);
+                        return (
+                          <a
+                            key={event.id}
+                            href={event.htmlLink}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className={`block px-1.5 py-0.5 ${colors.bg} ${colors.text} ${colors.hover} rounded text-xs truncate`}
+                          >
+                            {event.summary}
+                          </a>
+                        );
+                      })}
                       {dayTasks.map((task) => (
                         <div
                           key={task.id}
@@ -630,13 +678,14 @@ export function CalendarView({
                       const pos = getEventDisplayPosition(event);
                       if (!pos) return null;
                       const isDraggingThis = eventDrag?.eventId === event.id;
+                      const colors = getAccountColors(event.account);
                       return (
                         <div
                           key={event.id}
                           className={`absolute left-0.5 right-0.5 rounded p-1 overflow-hidden z-10 border-l-2 group ${
                             isDraggingThis
-                              ? 'bg-blue-200 border-blue-600 opacity-80 shadow-lg'
-                              : 'bg-blue-100 text-blue-800 hover:bg-blue-200 border-blue-500'
+                              ? `${colors.bg} ${colors.border} opacity-80 shadow-lg`
+                              : `${colors.bg} ${colors.text} ${colors.hover} ${colors.border}`
                           } ${mode === 'day' && onEventUpdate ? 'cursor-move' : ''}`}
                           style={{ top: pos.top, height: pos.height }}
                           onMouseDown={(e) => {
@@ -657,11 +706,11 @@ export function CalendarView({
                             }}
                           >
                             <div className="text-xs font-medium truncate pr-6">{event.summary}</div>
-                            <div className="text-xs text-blue-600 truncate">
+                            <div className={`text-xs ${colors.text} opacity-75 truncate`}>
                               {formatTimeRange(event.start, event.end)}
                             </div>
                             {event.location && pos.height > 50 && (
-                              <div className="text-xs text-blue-500 truncate">
+                              <div className={`text-xs ${colors.text} opacity-60 truncate`}>
                                 📍 {event.location}
                               </div>
                             )}
@@ -683,7 +732,7 @@ export function CalendarView({
                           {/* Resize handle */}
                           {mode === 'day' && onEventUpdate && (
                             <div
-                              className="absolute bottom-0 left-0 right-0 h-2 cursor-ns-resize hover:bg-blue-300/50"
+                              className="absolute bottom-0 left-0 right-0 h-2 cursor-ns-resize hover:bg-black/10"
                               onMouseDown={(e) => {
                                 e.stopPropagation();
                                 handleEventDragStart(e, event, 'resize');

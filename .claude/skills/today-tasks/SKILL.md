@@ -4,25 +4,29 @@ Open the AI Tasks web app and display today's tasks.
 
 ## Behavior
 
-1. Start the development server if not already running
-2. Open the browser to http://localhost:5173
-3. Display a summary of today's tasks using gog CLI
+1. Install dependencies if needed
+2. Start the development server if not already running
+3. Open the browser to http://localhost:5173
+4. Display a summary of today's tasks using gog CLI
 
 ## Implementation
 
 ```bash
-# Navigate to the task app directory
 cd /home/kei/everything/work/task
+
+# Install dependencies if node_modules missing
+if [ ! -d "node_modules" ]; then
+  npm install
+fi
 
 # Check if dev server is already running
 if ! curl -s http://localhost:3001/api/health > /dev/null 2>&1; then
-  # Start dev server in background
   npm run dev &
   sleep 3
 fi
 
 # Open browser
-xdg-open http://localhost:5173 2>/dev/null || open http://localhost:5173 2>/dev/null || echo "Open http://localhost:5173 in your browser"
+xdg-open http://localhost:5173 2>/dev/null &
 ```
 
 ## Task Summary
@@ -31,14 +35,17 @@ After launching, display a quick summary of tasks using gog:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
-source ~/.gog_env 2>/dev/null
+source ~/.gog_env
 
-echo "=== Today's Tasks ==="
-gog tasks list --json 2>/dev/null | head -20 || echo "Run 'npm run dev' in /home/kei/everything/work/task first"
+# List all task lists, then list tasks from each
+gog tasks lists list
+# Then use: gog tasks list <tasklistId>
 ```
 
 ## Notes
 
-- The app runs on http://localhost:5173 (frontend) and http://localhost:3001 (backend)
-- Uses gog CLI for Google Tasks integration
-- AI chat sidebar available for task organization help
+- Frontend: http://localhost:5173 / Backend: http://localhost:3001
+- gog CLI commands:
+  - `gog tasks lists list` - show all task lists with IDs
+  - `gog tasks list <tasklistId>` - list tasks in a specific list
+  - `gog tasks --help` - see all available commands
